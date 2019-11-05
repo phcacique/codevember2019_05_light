@@ -8,82 +8,152 @@
 
 import SpriteKit
 import GameplayKit
+import SwiftGameOfLife
 
 class GameScene: SKScene {
     
-    private var label : SKLabelNode?
-    private var spinnyNode : SKShapeNode?
+    let threshold:Int = 100
+    let border:CGFloat = 50
+    var imageMatrix: [[Bool]] = []
+    var colors:[[UIColor]] = []
+    var grid:Grid = Grid()
+    var renderTime: TimeInterval = 0
+    let duration: TimeInterval = 0.5
+    var isPlaying: Bool = true
+    let color: UIColor = UIColor(red: 72/255, green:219/255, blue:251/255, alpha: 1)
+    let images:[String] = ["luz", "light", "luce", "lumiere", "cahaya", "urdu", "hebraico"]
+    var currentImage:Int = 0
+    
     
     override func didMove(to view: SKView) {
+        self.backgroundColor = UIColor(red:34/255, green:47/255, blue:62/255, alpha: 1)
         
-        // Get label node from scene and store it for use later
-        self.label = self.childNode(withName: "//helloLabel") as? SKLabelNode
-        if let label = self.label {
-            label.alpha = 0.0
-            label.run(SKAction.fadeIn(withDuration: 2.0))
-        }
+        restart()
         
-        // Create shape node to use during mouse interaction
-        let w = (self.size.width + self.size.height) * 0.05
-        self.spinnyNode = SKShapeNode.init(rectOf: CGSize.init(width: w, height: w), cornerRadius: w * 0.3)
+        let leftSwipe = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipes(_:)))
+        let rightSwipe = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipes(_:)))
+        let tap = UITapGestureRecognizer(target: self, action: #selector(self.handleTap(_:)))
         
-        if let spinnyNode = self.spinnyNode {
-            spinnyNode.lineWidth = 2.5
+        leftSwipe.direction = .left
+        rightSwipe.direction = .right
+
+        view.addGestureRecognizer(leftSwipe)
+        view.addGestureRecognizer(rightSwipe)
+        view.addGestureRecognizer(tap)
+    }
+    
+    func restart(){
+        colors = []
+        imageMatrix = []
+        
+        removeAllActions()
+        removeAllChildren()
+        
+        if let image = UIImage(named: images[currentImage]){
+            let rgba = RGBA(image)
             
-            spinnyNode.run(SKAction.repeatForever(SKAction.rotate(byAngle: CGFloat(Double.pi), duration: 1)))
-            spinnyNode.run(SKAction.sequence([SKAction.wait(forDuration: 0.5),
-                                              SKAction.fadeOut(withDuration: 0.5),
-                                              SKAction.removeFromParent()]))
+            
+            for x in 0..<rgba.width {
+                var temp:[UIColor] = []
+                var temp2:[Bool] = []
+                for y in 0..<rgba.height {
+                    let index = y * rgba.width + x
+                    let pixel = rgba.pixels[index]
+                    temp.append(UIColor(red: CGFloat(pixel.red)/CGFloat(255), green: CGFloat(pixel.green)/CGFloat(255), blue: CGFloat(pixel.blue)/CGFloat(255), alpha: 1))
+                    temp2.append( (pixel.alpha >= threshold) )
+                }
+                colors.append(temp)
+                imageMatrix.append( temp2)
+            }
+            
+            setup()
         }
     }
     
-    
-    func touchDown(atPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.green
-            self.addChild(n)
+    @objc func handleSwipes(_ sender:UISwipeGestureRecognizer) {
+            
+        if (sender.direction == .left) {
+            currentImage -= 1
+            if currentImage < 0{
+                currentImage = images.count-1
+            }
+            restart()
+        }
+            
+        if (sender.direction == .right) {
+            currentImage += 1
+            if currentImage >= images.count{
+                currentImage = 0
+            }
+            restart()
         }
     }
     
-    func touchMoved(toPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.blue
-            self.addChild(n)
-        }
+    @objc func handleTap(_ sender: UITapGestureRecognizer? = nil) {
+        setup()
     }
     
-    func touchUp(atPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.red
-            self.addChild(n)
-        }
-    }
-    
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let label = self.label {
-            label.run(SKAction.init(named: "Pulse")!, withKey: "fadeInOut")
+    func setup(){
+        grid = Grid(width: imageMatrix.count, height: imageMatrix[0].count, isRandom: false, proportion: 50)
+        grid.addRule(CountRule(name: "Solitude", startState: .alive, endState: .dead, count: 2, type: .lessThan))
+        grid.addRule(CountRule(name: "Survive2", startState: .alive, endState: .alive, count: 2, type: .equals))
+        grid.addRule(CountRule(name: "Survive3", startState: .alive, endState: .alive, count: 3, type: .equals))
+        grid.addRule(CountRule(name: "Overpopulation", startState: .alive, endState: .dead, count: 3, type: .greaterThan))
+        grid.addRule(CountRule(name: "Birth", startState: .dead, endState: .alive, count: 3, type: .equals))
+        
+        for i in 0..<imageMatrix.count{
+            for j in 0..<imageMatrix[0].count{
+                if imageMatrix[i][j] {
+                    grid.cells[i][imageMatrix[0].count - j - 1].state = ( Int.random(in: 0...100) < 50 ) ? .alive : .dead
+                }
+            }
         }
         
-        for t in touches { self.touchDown(atPoint: t.location(in: self)) }
+        showGen()
+        isPlaying = true
     }
     
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchMoved(toPoint: t.location(in: self)) }
+    func showGen(){
+        
+        let size:CGFloat = (min(self.frame.width, self.frame.height) -  border) / CGFloat(max(grid.width,grid.height))
+        let posX:CGFloat = (self.frame.width  - (CGFloat(grid.width) * size))/2
+        let posY:CGFloat = (self.frame.height - (CGFloat(grid.height) * size))/2
+        for i in 0..<grid.width {
+            for j in 0..<grid.height {
+                if imageMatrix[i][imageMatrix[i].count - j - 1] && grid.cells[i][j].state == .alive {
+                    let pos = CGPoint(x: posX + CGFloat(i) * size * 1.05, y: posY + CGFloat(j) * size * 1.05)
+                    showEntity(pos, size, colors[i][imageMatrix[i].count - j - 1])
+                }
+            }
+        }
     }
     
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchUp(atPoint: t.location(in: self)) }
+    func showEntity(_ pos: CGPoint, _ size: CGFloat, _ color:UIColor = .white){
+        let node:SKShapeNode = SKShapeNode(circleOfRadius: size/2)
+        node.fillColor = color.withAlphaComponent(CGFloat.random(in: 0.3...1))
+        node.lineWidth = 0
+        node.position = CGPoint(x: pos.x + size, y: pos.y + size)
+        node.alpha = 0
+        addChild(node)
+        
+        let d = Double.random(in: duration...4*duration)
+        node.run(SKAction.sequence([
+            SKAction.fadeIn(withDuration: d*0.1),
+            SKAction.group([
+                SKAction.fadeAlpha(to: 0, duration: d),
+                SKAction.scale(to: CGFloat.random(in: 2...4), duration: d),
+                SKAction.move(by: CGVector(dx: CGFloat.random(in: -10...10), dy: CGFloat.random(in: -10...10)), duration: d)
+            ]),
+            SKAction.removeFromParent()
+        ]))
     }
-    
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchUp(atPoint: t.location(in: self)) }
-    }
-    
     
     override func update(_ currentTime: TimeInterval) {
-        // Called before each frame is rendered
+        
+        if isPlaying && currentTime > renderTime {
+            grid.applyRules()
+            showGen()
+            renderTime = currentTime + duration
+        }
     }
 }
